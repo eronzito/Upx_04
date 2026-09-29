@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Image viewer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+:root{--bg:#e9edee;--panel:#fbfcfc;--ink:#14282b;--muted:#5c7175;--line:#c9d3d5;--accent:#0b7a75;--accent-ink:#fff;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1a1c;--panel:#172427;--ink:#e3eeee;--muted:#8fa6a9;--line:#2a3d40;--accent:#3cc4bb;--accent-ink:#06211f}}
+:root[data-theme="dark"]{--bg:#0f1a1c;--panel:#172427;--ink:#e3eeee;--muted:#8fa6a9;--line:#2a3d40;--accent:#3cc4bb;--accent-ink:#06211f}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font-family:"Segoe UI",system-ui,-apple-system,Helvetica,Arial,sans-serif;overflow:hidden}
+#stage{position:absolute;inset:0;overflow:hidden;cursor:grab;touch-action:none;background:var(--bg)}
+#stage.drag{cursor:grabbing}
+#img{position:absolute;left:0;top:0;transform-origin:0 0;max-width:none;user-select:none;-webkit-user-drag:none;will-change:transform;box-shadow:0 2px 24px rgba(0,0,0,.25)}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,label:focus-within{outline:2px solid var(--accent);outline-offset:2px}
+#menuBtn{position:absolute;left:14px;top:calc(14px + env(safe-area-inset-top,0px));z-index:5;width:44px;height:44px;border-radius:10px;border:1px solid var(--line);background:var(--panel);display:grid;place-items:center}
+#menuBtn svg{width:22px;height:22px;stroke:var(--ink)}
+#side{position:absolute;left:0;top:0;bottom:0;width:280px;max-width:86vw;z-index:10;background:var(--panel);border-right:1px solid var(--line);padding:calc(14px + env(safe-area-inset-top,0px)) 18px 18px;transform:translateX(-100%);transition:transform .25s ease;display:flex;flex-direction:column;gap:20px;overflow-y:auto}
+#side.open{transform:none}
+#scrim{position:absolute;inset:0;z-index:9;background:rgba(0,0,0,.3);opacity:0;pointer-events:none;transition:opacity .25s}
+#scrim.on{opacity:1;pointer-events:auto}
+.head{display:flex;justify-content:space-between;align-items:center}
+h1{font-size:18px;margin:0;font-weight:650}
+.x{width:36px;height:36px;border-radius:8px;border:1px solid var(--line);background:transparent}
+h2{font-size:14px;margin:0 0 8px;font-weight:600;color:var(--muted)}
+.row{display:flex;gap:8px}
+.btn{flex:1;min-height:40px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:transparent;text-align:center}
+.btn:hover{border-color:var(--accent)}
+.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);display:block;font-weight:600}
+input[type=file]{position:absolute;opacity:0;width:1px;height:1px}
+input[type=range]{width:100%;accent-color:var(--accent)}
+.zoomval{font-variant-numeric:tabular-nums;color:var(--ink);font-weight:600}
+p.tip{margin:0;font-size:14px;line-height:1.55;color:var(--muted)}
+#badge{position:absolute;right:14px;bottom:calc(14px + env(safe-area-inset-bottom,0px));z-index:4;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:14px;font-variant-numeric:tabular-nums}
+@media (prefers-reduced-motion:reduce){#side,#scrim{transition:none}}
+</style>
+</head>
+<body>
+<div id="stage"><img id="img" alt="Zoomable image" draggable="false"></div>
+
+<button id="menuBtn" aria-label="Open menu" aria-expanded="false" aria-controls="side">
+  <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+</button>
+<div id="scrim"></div>
+<aside id="side" aria-label="Viewer menu">
+  <div class="head"><h1>Image viewer</h1><button class="x" id="closeBtn" aria-label="Close menu">✕</button></div>
+  <div>
+    <h2>Zoom <span class="zoomval" id="zv">100%</span></h2>
+    <input type="range" id="zoom" min="0" max="100" value="50" aria-label="Zoom level">
+
+    <div class="row" style="margin-top:8px">
+      <button class="btn" id="fit">Preencher</button>
+      <button class="btn" id="actual">Tamanho real</button>
+    </div>
+  </div>
+  <p class="tip">Arraste a imagem para mover ela. Use o scroll do mouse para dar zoom ou de dois cliques para ampliar.</p>
+</aside>
+<div id="badge" aria-live="polite">100%</div>
+
+<script>
+(function(){
+
+  var stage=document.getElementById('stage'),img=document.getElementById('img'),
+      side=document.getElementById('side'),scrim=document.getElementById('scrim'),
+      menuBtn=document.getElementById('menuBtn'),badge=document.getElementById('badge'),
+      zv=document.getElementById('zv'),slider=document.getElementById('zoom');
+  var x=0,y=0,k=1,minK=0.05,maxK=16,fitK=1;
+
+  function apply(){
+    img.style.transform='translate('+x+'px,'+y+'px) scale('+k+')';
+    var t=Math.round(k*100)+'%';badge.textContent=t;zv.textContent=t;
+    slider.value=Math.round(100*Math.log(k/minK)/Math.log(maxK/minK));
+  }
+  function zoomAt(cx,cy,nk){
+    nk=Math.min(maxK,Math.max(minK,nk));
+    x=cx-(cx-x)*(nk/k);y=cy-(cy-y)*(nk/k);k=nk;apply();
+  }
+  function center(){return [stage.clientWidth/2,stage.clientHeight/2];}
+  function fit(){
+    var w=img.naturalWidth||1,h=img.naturalHeight||1,sw=stage.clientWidth,sh=stage.clientHeight;
+    fitK=Math.min(sw/w,sh/h)*0.94;minK=Math.min(0.05,fitK/2);
+    k=fitK;x=(sw-w*k)/2;y=(sh-h*k)/2;apply();
+  }
+  function actual(){var c=center();zoomAt(c[0],c[1],1);}
+
+  img.onload=fit;
+  img.src="mapafacens.jpeg";
+  window.addEventListener('resize',function(){if(Math.abs(k-fitK)<1e-6)fit();});
+
+  // Wheel zoom
+  stage.addEventListener('wheel',function(e){
+    e.preventDefault();
+    var r=stage.getBoundingClientRect();
+    zoomAt(e.clientX-r.left,e.clientY-r.top,k*Math.exp(-e.deltaY*(e.ctrlKey?0.01:0.0015)));
+  },{passive:false});
+  stage.addEventListener('dblclick',function(e){
+    var r=stage.getBoundingClientRect();zoomAt(e.clientX-r.left,e.clientY-r.top,k*2);
+  });
+
+  // Drag + pinch with pointer events
+  var ptrs=new Map(),lastDist=0,lastMid=null;
+  stage.addEventListener('pointerdown',function(e){
+    stage.setPointerCapture(e.pointerId);ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    stage.classList.add('drag');lastDist=0;lastMid=null;
+  });
+  stage.addEventListener('pointermove',function(e){
+    var p=ptrs.get(e.pointerId);if(!p)return;
+    if(ptrs.size===1){x+=e.clientX-p.x;y+=e.clientY-p.y;p.x=e.clientX;p.y=e.clientY;apply();}
+    else if(ptrs.size===2){
+      p.x=e.clientX;p.y=e.clientY;
+      var a=Array.from(ptrs.values()),d=Math.hypot(a[0].x-a[1].x,a[0].y-a[1].y),
+          mx=(a[0].x+a[1].x)/2,my=(a[0].y+a[1].y)/2,r=stage.getBoundingClientRect();
+      if(lastDist){x+=mx-lastMid.x;y+=my-lastMid.y;zoomAt(mx-r.left,my-r.top,k*d/lastDist);}
+      lastDist=d;lastMid={x:mx,y:my};
+    }
+  });
+  function up(e){ptrs.delete(e.pointerId);lastDist=0;lastMid=null;if(!ptrs.size)stage.classList.remove('drag');
+    ptrs.forEach(function(v){});}
+  stage.addEventListener('pointerup',up);stage.addEventListener('pointercancel',up);
+
+  // Sidebar
+  function setMenu(open){
+    side.classList.toggle('open',open);scrim.classList.toggle('on',open);
+    menuBtn.setAttribute('aria-expanded',open);menuBtn.setAttribute('aria-label',open?'Close menu':'Open menu');
+    if(open)document.getElementById('closeBtn').focus();else menuBtn.focus();
+  }
+  menuBtn.onclick=function(){setMenu(!side.classList.contains('open'));};
+  document.getElementById('closeBtn').onclick=function(){setMenu(false);};
+  scrim.onclick=function(){setMenu(false);};
+  document.addEventListener('keydown',function(e){if(e.key==='Escape'&&side.classList.contains('open'))setMenu(false);});
+
+  // Controls
+  document.getElementById('fit').onclick=fit;
+  document.getElementById('actual').onclick=actual;
+  slider.oninput=function(){var c=center();zoomAt(c[0],c[1],minK*Math.pow(maxK/minK,slider.value/100));};
+
+
+})();
+</script>
+</body>
+</html>
